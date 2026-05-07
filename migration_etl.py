@@ -171,11 +171,13 @@ def truncate_destination_tables(engine_destination) -> None:
             logger.info("Ejecutando TRUNCATE TABLE file CASCADE...")
             connection.execute(text("TRUNCATE TABLE file CASCADE"))
             
-            logger.info("Ejecutando TRUNCATE TABLE source CASCADE...")
-            connection.execute(text("TRUNCATE TABLE source CASCADE"))
+            logger.info("⚠️ source NO se trunca (se preserva como está)")
+            # COMENTADO: No truncar source
+            # logger.info("Ejecutando TRUNCATE TABLE source CASCADE...")
+            # connection.execute(text("TRUNCATE TABLE source CASCADE"))
             
             connection.commit()
-            logger.info("✓ Truncate completado")
+            logger.info("✓ Truncate de file completado (source preservado)")
     
     except Exception as e:
         logger.error(f"Error en truncate: {e}")
@@ -183,48 +185,32 @@ def truncate_destination_tables(engine_destination) -> None:
 
 
 # ============================================================================
-# PASO 4: INSERCIÓN DE SOURCE (SIN MAPEO DE IDS - COPIA DIRECTA)
+# PASO 4: SOURCE NO SE MIGRA (COMENTADO - NO MODIFICAR TABLA SOURCE)
 # ============================================================================
-
-def insert_source(engine_destination, df_source: pd.DataFrame) -> None:
-    """
-    Inserta los registros de source en el destino tal como están en el origen.
-    
-    PASO 4 - LÓGICA SIMPLIFICADA:
-    Copia TODO la tabla source directamente, manteniendo los IDs originales.
-    De esta forma:
-    - No hay conflictos con IDs autogenerados
-    - Todos los registros de file que referencian source encontrarán su padre
-    - No hay registros huérfanos
-    
-    Args:
-        engine_destination: Engine de SQLAlchemy para la base de datos destino.
-        df_source: DataFrame con los datos de source desde origen.
-    
-    Raises:
-        Exception: Si hay problemas en la inserción.
-    """
-    try:
-        logger.info("\n" + "="*70)
-        logger.info("PASO 4: INSERCIÓN DE SOURCE (COPIA DIRECTA)")
-        logger.info("="*70)
-        
-        logger.info(f"Insertando {len(df_source)} registros de source...")
-        
-        # Insertamos source directamente, preservando todos los IDs originales
-        df_source.to_sql(
-            'source',
-            engine_destination,
-            if_exists='append',  # Append porque ya hicimos TRUNCATE
-            index=False
-        )
-        
-        logger.info(f"✓ Inserción de source completada")
-        logger.info(f"✓ {len(df_source)} registros insertados con IDs originales preservados")
-    
-    except Exception as e:
-        logger.error(f"Error en inserción de source: {e}")
-        sys.exit(1)
+#
+# NOTA IMPORTANTE: La tabla source NO se migra, se mantiene tal como está 
+# en la BD destino. No se realiza ninguna operación de inserción o 
+# modificación en source.
+#
+# def insert_source(engine_destination, df_source: pd.DataFrame) -> None:
+#     """
+#     DESHABILITADO: Inserta los registros de source en el destino.
+#     
+#     Esta función fue comentada porque la tabla source NO debe sufrir
+#     ninguna modificación. Se preserva completamente en la BD destino.
+#     
+#     Args:
+#         engine_destination: Engine de SQLAlchemy para la base de datos destino.
+#         df_source: DataFrame con los datos de source desde origen.
+#     """
+#     try:
+#         logger.info("\n" + "="*70)
+#         logger.info("PASO 4: INSERCIÓN DE SOURCE (DESHABILITADO)")
+#         logger.info("="*70)
+#         logger.info("SKIPPED: source no se modifica")
+#     except Exception as e:
+#         logger.error(f"Error: {e}")
+#         sys.exit(1)
 
 
 # ============================================================================
@@ -233,12 +219,20 @@ def insert_source(engine_destination, df_source: pd.DataFrame) -> None:
 
 def insert_file(engine_destination, df_file: pd.DataFrame) -> None:
     """
-    Inserta los registros de file en el destino tal como están en el origen.
+    Inserta los registros de file en el destino con cambio rústico en id_source.
     
-    PASO 5 - LÓGICA SIMPLIFICADA:
-    Copia TODO la tabla file directamente, manteniendo los IDs originales.
-    Como source ya fue copiada completa, todos los id_source en file encontrarán
-    su referencia en source. No hay registros huérfanos.
+    PASO 5 - LÓGICA CON CAMBIO RÚSTICO:
+    Copia la tabla file con un ajuste específico:
+    - Si id_source está entre 65 y 70 (inclusive), se suma 1 a su valor
+    - Los demás registros se copian tal como están
+    
+    Transformación de IDs afectados:
+    - id_source=65 → 66
+    - id_source=66 → 67
+    - id_source=67 → 68
+    - id_source=68 → 69
+    - id_source=69 → 70
+    - id_source=70 → 71
     
     Args:
         engine_destination: Engine de SQLAlchemy para la base de datos destino.
@@ -249,13 +243,27 @@ def insert_file(engine_destination, df_file: pd.DataFrame) -> None:
     """
     try:
         logger.info("\n" + "="*70)
-        logger.info("PASO 5: INSERCIÓN DE FILE (COPIA DIRECTA)")
+        logger.info("PASO 5: INSERCIÓN DE FILE (CON CAMBIO RÚSTICO DE ID_SOURCE)")
         logger.info("="*70)
         
-        logger.info(f"Insertando {len(df_file)} registros de file...")
+        # Copiar el dataframe para no modificar el original
+        df_file_modified = df_file.copy()
         
-        # Insertamos file directamente, preservando todos los IDs originales
-        df_file.to_sql(
+        # Crear máscara para registros con id_source entre 65-70
+        mask = (df_file_modified['id_source'] >= 65) & (df_file_modified['id_source'] <= 70)
+        affected_count = mask.sum()
+        
+        logger.info(f"Aplicando cambio rústico: si id_source entre 65-70, sumar 1...")
+        logger.info(f"  Registros afectados: {affected_count}")
+        logger.info(f"  Transformación: 65-70 → 66-71")
+        
+        # Aplicar el cambio rústico
+        df_file_modified.loc[mask, 'id_source'] = df_file_modified.loc[mask, 'id_source'] + 1
+        
+        logger.info(f"Insertando {len(df_file_modified)} registros de file...")
+        
+        # Insertamos file con el cambio rústico aplicado
+        df_file_modified.to_sql(
             'file',
             engine_destination,
             if_exists='append',  # Append porque ya hicimos TRUNCATE
@@ -263,7 +271,8 @@ def insert_file(engine_destination, df_file: pd.DataFrame) -> None:
         )
         
         logger.info(f"✓ Inserción de file completada")
-        logger.info(f"✓ {len(df_file)} registros insertados con IDs originales preservados")
+        logger.info(f"✓ {len(df_file_modified)} registros insertados")
+        logger.info(f"✓ {affected_count} registros con id_source incrementado (65-70 → 66-71)")
     
     except Exception as e:
         logger.error(f"Error en inserción de file: {e}")
@@ -354,10 +363,14 @@ def main():
         # PASO 3: Limpieza
         truncate_destination_tables(engine_destination)
         
-        # PASO 4: Inserción de source (copia directa, sin mapeo)
-        insert_source(engine_destination, df_source)
+        # NOTA: PASO 4 (Inserción de source) está DESHABILITADO
+        # La tabla source NO se migra, se mantiene tal como está en la BD destino
+        logger.info("\n" + "="*70)
+        logger.info("⚠️  PASO 4: SOURCE NO SE MIGRA (PRESERVADO)")
+        logger.info("="*70)
+        logger.info("source se mantiene sin cambios en la BD destino")
         
-        # PASO 5: Inserción de file (copia directa, sin mapeo)
+        # PASO 5: Inserción de file (con cambio rústico de id_source)
         insert_file(engine_destination, df_file)
         
         # PASO 6: Actualización de report (LÓGICA CRÍTICA - SQL PURO)
@@ -367,8 +380,10 @@ def main():
         logger.info("✓ MIGRACIÓN COMPLETADA EXITOSAMENTE")
         logger.info("="*70)
         logger.info("\nResumen:")
-        logger.info(f"  • Registros source migrados: {len(df_source)}")
-        logger.info(f"  • Registros file migrados: {len(df_file)}")
+        logger.info(f"  • Tabla source: SIN CAMBIOS (preservada en destino)")
+        logger.info(f"  • Tabla file: {len(df_file)} registros migrados")
+        logger.info(f"    └─ Con cambio rústico en id_source (65-70 → 66-71)")
+        logger.info(f"  • Tabla report: Actualizada con nuevas referencias")
         logger.info("\nVerificar integridad de datos en la base de datos destino.\n")
     
     except Exception as e:
